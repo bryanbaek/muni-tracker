@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Clock, Bus, Train, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -8,7 +8,8 @@ const TransitTracker = () => {
     const [location, setLocation] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-  
+
+    console.log(transitData);
     // Get user's location
     useEffect(() => {
       const getLocation = () => {
@@ -29,7 +30,7 @@ const TransitTracker = () => {
           }
         );
       };
-  
+      
       getLocation();
       // Update location every 5 minutes
       const locationTimer = setInterval(getLocation, 300000);
@@ -37,12 +38,11 @@ const TransitTracker = () => {
     }, []);
   
     // Fetch transit data from SF Muni API
-    const fetchTransitData = async () => {
+    const fetchTransitData = useCallback(async () => {
       if (!location) return;
   
       try {
         // NextBus API endpoint for SF Muni
-        // Note: You'll need to replace this with your actual API key and handle it securely
         const radius = 0.1; // 0.1 miles radius
         const url = `https://api.511.org/transit/StopMonitoring?api_key=${process.env.NEXT_PUBLIC_TRANSIT_API_KEY}&agency=SF&format=json&radius=${radius}&lat=${location.lat}&lon=${location.lng}`;
 
@@ -53,20 +53,25 @@ const TransitTracker = () => {
         
         // Transform API response into our format
         const transformedData = data.ServiceDelivery.StopMonitoringDelivery.MonitoredStopVisit
+          .filter(visit => visit?.MonitoredVehicleJourney)
           .map(visit => {
             const vehicle = visit.MonitoredVehicleJourney;
             return {
               id: vehicle.VehicleRef,
               line: vehicle.LineRef,
               destination: vehicle.DestinationName,
+              publishedLineName: vehicle.publishedLineName,
               stop: vehicle.MonitoredCall.StopPointName,
-              arrivalMin: Math.round(vehicle.MonitoredCall.ExpectedArrivalTime / 60),
+              stopPointRef: vehicle.MonitoredCall.stopPointRef,
+              arrivalMin: Math.max(0, Math.round(
+                (new Date(vehicle.MonitoredCall.ExpectedArrivalTime) - new Date()) / 60000
+              )),
               lastUpdated: 0
             };
           })
           .filter(route => {
-            // Only show arrivals within 15 mins AND only for T-line and 15 bus
-            return route.arrivalMin <= 15 && (route.line === 'T' || route.line === '15');
+            // Only show arrivals within 20 mins AND only for T-line and 15 bus
+            return route.arrivalMin < 20 && (route.line === 'T' || route.line === '15') && (route.stop === '3rd St & 20th St');
           });
   
         setTransitData(transformedData);
@@ -75,7 +80,7 @@ const TransitTracker = () => {
         setError('Failed to fetch transit data: ' + err.message);
         setLoading(false);
       }
-    };
+    }, [location]);
   
     // Fetch data initially and set up refresh interval
     useEffect(() => {
@@ -85,7 +90,7 @@ const TransitTracker = () => {
         const fetchTimer = setInterval(fetchTransitData, 60000);
         return () => clearInterval(fetchTimer);
       }
-    }, [location]);
+    }, [location, fetchTransitData]);
   
     // Update "last updated" counter every minute
     useEffect(() => {
@@ -124,8 +129,22 @@ const TransitTracker = () => {
             </AlertDescription>
           </Alert>
         ) : (
-          transitData.map(route => (
-            <Card key={route.id} className="shadow-lg">
+          Object.values(
+            transitData.reduce((acc, route) => {
+              const key = `${route.line}-${route.destination}`;
+              if (!acc[key]) {
+                acc[key] = {
+                  ...route,
+                  arrivalTimes: [route.arrivalMin]
+                };
+              } else {
+                acc[key].arrivalTimes.push(route.arrivalMin);
+                acc[key].arrivalTimes.sort((a, b) => a - b);
+              }
+              return acc;
+            }, {})
+          ).map(route => (
+            <Card key={`${route.line}-${route.destination}`} className="shadow-lg">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-3">
@@ -139,12 +158,13 @@ const TransitTracker = () => {
                         {route.type === 'bus' ? 'Bus ' : ''}{route.line}
                       </h2>
                       <p className="text-gray-600">{route.stop}</p>
+                      <p className="text-gray-500 text-sm">To: {route.destination}</p>
                     </div>
                   </div>
                   
                   <div className="text-right">
-                    <p className="text-2xl font-bold text-green-600">
-                      {route.arrivalMin} min
+                    <p className="text-xl font-bold text-green-600">
+                      {route.arrivalTimes.join(', ')} min
                     </p>
                     <div className="flex items-center text-sm text-gray-500">
                       <Clock className="h-4 w-4 mr-1" />
