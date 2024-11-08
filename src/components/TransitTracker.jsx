@@ -39,19 +39,36 @@ const TransitTracker = () => {
   
     // Fetch transit data from SF Muni API
     const fetchTransitData = useCallback(async () => {
-      if (!location) return;
+      if (!location) {
+        console.log('Location not available yet');
+        return;
+      }
   
       try {
-        // NextBus API endpoint for SF Muni
-        const radius = 0.1; // 0.1 miles radius
+        const radius = 0.1;
         const url = `https://api.511.org/transit/StopMonitoring?api_key=${process.env.NEXT_PUBLIC_TRANSIT_API_KEY}&agency=SF&format=json&radius=${radius}&lat=${location.lat}&lon=${location.lng}`;
-
+        
+        console.log('Fetching from URL:', url);
+        console.log('API Key present:', !!process.env.NEXT_PUBLIC_TRANSIT_API_KEY);
+        
         const response = await fetch(url);
-        if (!response.ok) throw new Error('Failed to fetch transit data');
+        console.log('Response status:', response.status);
+        console.log('Response ok:', response.ok);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Error response:', errorText);
+          throw new Error(`Failed to fetch transit data: ${response.status} ${response.statusText}`);
+        }
         
         const data = await response.json();
+        console.log('Raw API response:', data);
         
-        // Transform API response into our format
+        if (!data.ServiceDelivery?.StopMonitoringDelivery?.MonitoredStopVisit) {
+          console.error('Unexpected API response structure:', data);
+          throw new Error('Invalid API response structure');
+        }
+
         const transformedData = data.ServiceDelivery.StopMonitoringDelivery.MonitoredStopVisit
           .filter(visit => visit?.MonitoredVehicleJourney)
           .map(visit => {
@@ -70,13 +87,15 @@ const TransitTracker = () => {
             };
           })
           .filter(route => {
-            // Only show arrivals within 20 mins AND only for T-line and 15 bus
             return route.arrivalMin < 20 && (route.line === 'T' || route.line === '15') && (route.stop === '3rd St & 20th St');
           });
-  
+
+        console.log('Transformed data:', transformedData);
         setTransitData(transformedData);
         setLoading(false);
       } catch (err) {
+        console.error('Detailed error:', err);
+        console.error('Error stack:', err.stack);
         setError('Failed to fetch transit data: ' + err.message);
         setLoading(false);
       }
